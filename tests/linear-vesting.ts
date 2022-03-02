@@ -33,6 +33,9 @@ async function findAssociatedTokenAddress(
   )[0];
 }
 
+const sleep = (milliseconds: number) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 describe('linear-vesting', () => {
   const provider = anchor.Provider.env();
   anchor.setProvider(provider);
@@ -46,6 +49,11 @@ describe('linear-vesting', () => {
   const owner = (provider.wallet as NodeWallet).payer;
   const beneficiary = anchor.web3.Keypair.generate();
   const mintAuthority = owner;
+
+  let vaultAuthority = null;
+  let beneficiaryTokenAccount = null;
+  let vestingAccount = null;
+  let vaultAccount = null;
 
   it('Initialize vesting account', async () => {
     mint = await Token.createMint(
@@ -68,11 +76,11 @@ describe('linear-vesting', () => {
       amount
     );
 
-    const beneficiaryTokenAccount = await mint.getOrCreateAssociatedAccountInfo(
+    beneficiaryTokenAccount = await mint.getOrCreateAssociatedAccountInfo(
       beneficiary.publicKey
     );
 
-    const [vaultAccount] = await PublicKey.findProgramAddress(
+    [vaultAccount] = await PublicKey.findProgramAddress(
       [
         Buffer.from(anchor.utils.bytes.utf8.encode('token-vault')),
         beneficiaryTokenAccount.address.toBuffer(),
@@ -81,12 +89,12 @@ describe('linear-vesting', () => {
       program.programId
     );
 
-    const [vaultAuthority] = await PublicKey.findProgramAddress(
+    [vaultAuthority] = await PublicKey.findProgramAddress(
       [Buffer.from(anchor.utils.bytes.utf8.encode('vault-authority'))],
       program.programId
     );
 
-    const [vestingAccount] = await PublicKey.findProgramAddress(
+    [vestingAccount] = await PublicKey.findProgramAddress(
       [beneficiaryTokenAccount.address.toBuffer()],
       program.programId
     );
@@ -143,5 +151,59 @@ describe('linear-vesting', () => {
     assert.ok(_vestingAccount.beneficiary.equals(beneficiary.publicKey));
     assert.ok(_vestingAccount.owner.equals(owner.publicKey));
     assert.ok(_vestingAccount.mint.equals(mint.publicKey));
+  });
+
+  it('Withdraw', async () => {
+    await sleep(3000);
+
+    await program.rpc.withdraw({
+      accounts: {
+        beneficiary: beneficiary.publicKey,
+        beneficiaryAta: beneficiaryTokenAccount.address,
+        vaultAccount,
+        vestingAccount,
+        vaultAuthority,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      },
+      signers: [beneficiary],
+    });
+
+    const _vault = await mint.getAccountInfo(vaultAccount);
+    const _beneficiary = await mint.getAccountInfo(
+      beneficiaryTokenAccount.address
+    );
+    const remaining_amount = ((1000000 * 98) / 100) * 10 ** 9;
+    const beneficiary_amount = amount - remaining_amount;
+    const _vestingAccount = await program.account.vestingAccount.fetch(
+      vestingAccount
+    );
+    assert.ok(_vault.amount.toNumber() == remaining_amount);
+    assert.ok(_beneficiary.amount.toNumber() == beneficiary_amount);
+    assert.ok(_vestingAccount.releasedAmount.toNumber() === beneficiary_amount);
+  });
+
+  it('Revoke', async () => {
+    await program.rpc.revoke({
+      accounts: {
+        owner: owner.publicKey,
+        ownerTokenAccount: ownerTokenAccount.address,
+        vaultAccount,
+        vestingAccount,
+        vaultAuthority,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      },
+      signers: [owner],
+    });
+
+    const _vault = await mint.getAccountInfo(vaultAccount);
+    const _vestingAccount = await program.account.vestingAccount.fetch(
+      vestingAccount
+    );
+    assert.ok(_vault.amount.toNumber() == 0);
+    assert.ok(_vestingAccount.revoked);
   });
 });

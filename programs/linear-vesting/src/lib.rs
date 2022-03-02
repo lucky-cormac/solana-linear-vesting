@@ -189,6 +189,37 @@ pub struct Initialize<'info> {
     pub token_program: AccountInfo<'info>,
 }
 
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(mut, signer)]
+    pub beneficiary: AccountInfo<'info>,
+    #[account(mut)]
+    pub beneficiary_ata: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub vault_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub vesting_account: Account<'info, VestingAccount>,
+    pub vault_authority: AccountInfo<'info>,
+    pub system_program: AccountInfo<'info>,
+    pub rent: Sysvar<'info, Rent>,
+    pub token_program: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Revoke<'info> {
+    #[account(mut, signer)]
+    pub owner: AccountInfo<'info>,
+    #[account(mut)]
+    pub vault_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub vesting_account: Account<'info, VestingAccount>,
+    #[account(mut)]
+    pub owner_token_account: Account<'info, TokenAccount>,
+    pub vault_authority: AccountInfo<'info>,
+    pub system_program: AccountInfo<'info>,
+    pub rent: Sysvar<'info, Rent>,
+    pub token_program: AccountInfo<'info>,
+}
 
 #[account]
 pub struct VestingAccount {
@@ -210,6 +241,8 @@ pub struct VestingAccount {
     pub total_deposited_amount: u64,
     /// Amount that has been released
     pub released_amount: u64,
+    /// The account is revoked
+    pub revoked: bool
 }
 
 impl<'info> Initialize<'info> {
@@ -226,6 +259,28 @@ impl<'info> Initialize<'info> {
         let cpi_accounts = SetAuthority {
             account_or_mint: self.vault_account.to_account_info().clone(),
             current_authority: self.owner.clone(),
+        };
+        CpiContext::new(self.token_program.clone(), cpi_accounts)
+    }
+}
+
+impl<'info> Withdraw<'info> {
+    fn into_transfer_to_beneficiary_context(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        let cpi_accounts = Transfer {
+            from: self.vault_account.to_account_info().clone(),
+            to: self.beneficiary_ata.to_account_info().clone(),
+            authority: self.vault_authority.clone(),
+        };
+        CpiContext::new(self.token_program.clone(), cpi_accounts)
+    }
+}
+
+impl<'info> Revoke<'info> {
+    fn into_transfer_to_owner_context(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
+        let cpi_accounts = Transfer {
+            from: self.vault_account.to_account_info().clone(),
+            to: self.owner_token_account.to_account_info().clone(),
+            authority: self.vault_authority.clone(),
         };
         CpiContext::new(self.token_program.clone(), cpi_accounts)
     }
