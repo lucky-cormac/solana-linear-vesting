@@ -71,21 +71,21 @@ pub mod linear_vesting {
         let current_balance = ctx.accounts.vault_account.amount;
         let total_balance = released_amount + current_balance;
 
-        let mut unreleased_token = 0;
+        let mut unreleased_amount = 0;
 
         if current_time < start_ts + cliff_ts {
-            unreleased_token = 0;
+            unreleased_amount = 0;
         } else if current_time >= start_ts + duration || revoked {
-            unreleased_token = total_balance - released_amount;
+            unreleased_amount = current_balance;
         } else {
-            unreleased_token = ((total_balance * (current_time - start_ts) as u64) / duration as u64) - released_amount;
+            unreleased_amount = ((total_balance * (current_time - start_ts) as u64) / duration as u64) - released_amount;
         }
 
-        if unreleased_token <= 0 {
+        if unreleased_amount <= 0 {
             return Err(LinearVestingError::NoTokensDue.into());
         }
 
-        ctx.accounts.vesting_account.released_amount += unreleased_token;
+        ctx.accounts.vesting_account.released_amount += unreleased_amount;
 
         let (_vault_authority, vault_authority_bump) =
             Pubkey::find_program_address(&[VAULT_AUTHORITY_PDA_SEED], ctx.program_id);
@@ -93,13 +93,60 @@ pub mod linear_vesting {
         
         token::transfer(
             ctx.accounts.into_transfer_to_beneficiary_context().with_signer(&[&authority_seeds[..]]),
-            unreleased_token,
+            unreleased_amount,
         )?;
 
         Ok(())
     }
 
-    
+    pub fn revoke(
+        ctx: Context<Revoke>
+    ) -> ProgramResult {
+        if !ctx.accounts.owner.is_signer {
+            return Err(ProgramError::MissingRequiredSignature);
+        }
+        if ctx.accounts.owner.key != &ctx.accounts.vesting_account.owner {
+            return Err(LinearVestingError::NotMatchingOwner.into());
+        }
+        if !ctx.accounts.vesting_account.revocable {
+            return Err(LinearVestingError::NotRevocable.into());
+        }
+        if ctx.accounts.vesting_account.revoked {
+            return Err(LinearVestingError::TokenAlreadyRevoked.into());
+        }
+
+        let current_time = clock::Clock::get().unwrap().unix_timestamp;
+        let start_ts = ctx.accounts.vesting_account.start_ts;
+        let cliff_ts = ctx.accounts.vesting_account.cliff_ts;
+        let duration = ctx.accounts.vesting_account.duration;
+        let revoked = ctx.accounts.vesting_account.revoked;
+        let released_amount = ctx.accounts.vesting_account.released_amount;
+        let current_balance = ctx.accounts.vault_account.amount;
+        let total_balance = current_balance + released_amount;
+        
+        let mut unreleased_amount = 0;
+
+        if current_time < start_ts + cliff_ts {
+            unreleased_amount = 0;
+        } else if current_time >= start_ts + duration || revoked {
+            unreleased_amount = current_balance;
+        } else {
+            unreleased_amount = ((total_balance * (current_time - start_ts) as u64) / duration as u64) - released_amount;
+        }
+
+        ctx.accounts.vesting_account.revoked = true;
+
+        let (_vault_authority, vault_authority_bump) =
+            Pubkey::find_program_address(&[VAULT_AUTHORITY_PDA_SEED], ctx.program_id);
+        let authority_seeds = &[&VAULT_AUTHORITY_PDA_SEED[..], &[vault_authority_bump]];
+        
+        token::transfer(
+            ctx.accounts.into_transfer_to_owner_context().with_signer(&[&authority_seeds[..]]),
+            current_balance - unreleased_amount,
+        )?;
+
+        Ok(())
+    }
 
 }
 

@@ -14,6 +14,8 @@ pub enum LinearVestingError {
     FinalTimeBeforeCurrentTime,
     #[error("TokenVesting: no tokens are due")]
     NoTokensDue,
+    #[error("TokenVesting: not matching owner")]
+    NotMatchingOwner,
     #[error("TokenVesting: cannot revoke")]
     NotRevocable,
     #[error("TokenVesting: token already revoked")]
