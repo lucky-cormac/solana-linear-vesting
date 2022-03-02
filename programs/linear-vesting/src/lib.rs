@@ -1,6 +1,9 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{prelude::*, solana_program::clock};
 use anchor_spl::token::{self, Mint, SetAuthority, TokenAccount, Transfer};
 use spl_token::instruction::AuthorityType;
+
+pub mod error;
+use crate::{error::LinearVestingError};
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
@@ -25,6 +28,7 @@ pub mod linear_vesting {
         ctx.accounts.vesting_account.cliff_ts = cliff_ts;
         ctx.accounts.vesting_account.duration = duration;
         ctx.accounts.vesting_account.revocable = revocable;
+        ctx.accounts.vesting_account.revoked = false;
 
         ctx.accounts.vesting_account.beneficiary = *ctx.accounts.beneficiary.key;
         ctx.accounts.vesting_account.owner = *ctx.accounts.owner.key;
@@ -50,6 +54,52 @@ pub mod linear_vesting {
 
         Ok(())
     }
+
+    pub fn withdraw(
+        ctx: Context<Withdraw>
+    ) -> ProgramResult {
+        if !ctx.accounts.beneficiary.is_signer {
+            return Err(ProgramError::MissingRequiredSignature);
+        }
+
+        let current_time = clock::Clock::get().unwrap().unix_timestamp;
+        let start_ts = ctx.accounts.vesting_account.start_ts;
+        let cliff_ts = ctx.accounts.vesting_account.cliff_ts;
+        let duration = ctx.accounts.vesting_account.duration;
+        let revoked = ctx.accounts.vesting_account.revoked;
+        let released_amount = ctx.accounts.vesting_account.released_amount;
+        let current_balance = ctx.accounts.vault_account.amount;
+        let total_balance = released_amount + current_balance;
+
+        let mut unreleased_token = 0;
+
+        if current_time < start_ts + cliff_ts {
+            unreleased_token = 0;
+        } else if current_time >= start_ts + duration || revoked {
+            unreleased_token = total_balance - released_amount;
+        } else {
+            unreleased_token = ((total_balance * (current_time - start_ts) as u64) / duration as u64) - released_amount;
+        }
+
+        if unreleased_token <= 0 {
+            return Err(LinearVestingError::NoTokensDue.into());
+        }
+
+        ctx.accounts.vesting_account.released_amount += unreleased_token;
+
+        let (_vault_authority, vault_authority_bump) =
+            Pubkey::find_program_address(&[VAULT_AUTHORITY_PDA_SEED], ctx.program_id);
+        let authority_seeds = &[&VAULT_AUTHORITY_PDA_SEED[..], &[vault_authority_bump]];
+        
+        token::transfer(
+            ctx.accounts.into_transfer_to_beneficiary_context().with_signer(&[&authority_seeds[..]]),
+            unreleased_token,
+        )?;
+
+        Ok(())
+    }
+
+    
 
 }
 
